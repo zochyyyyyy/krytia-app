@@ -274,7 +274,11 @@ function vLogin() {
     <button type="button" class="btn wide google" data-act="google"${ui.busy ? ' disabled' : ''}>
       <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.2l7.9 6.2C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 2.9-2.2 5.4-4.7 7.1l7.6 5.9c4.4-4.1 6.9-10.1 6.9-17.5z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-2.9-.8-4.6s.3-3.2.8-4.6l-7.9-6.2C1 16.6 0 20.2 0 24s1 7.4 2.7 10.8l7.9-6.2z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.9 2.3-8.3 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.2C6.6 42.6 14.6 48 24 48z"/></svg>
       Pokračovať cez Google</button>
+    <button type="button" class="btn wide apple" data-act="apple"${ui.busy ? ' disabled' : ''}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.4 12.6c0-2.6 2.1-3.8 2.2-3.9-1.2-1.8-3.1-2-3.7-2-1.6-.2-3.1.9-3.9.9-.8 0-2-.9-3.4-.9-1.7 0-3.3 1-4.2 2.6-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6 1.3-.1 1.8-.8 3.3-.8 1.6 0 2 .8 3.4.8 1.4 0 2.3-1.3 3.1-2.5 1-1.4 1.4-2.8 1.4-2.9-.1 0-2.7-1-2.7-4.1zM13.9 4.9c.7-.9 1.2-2 1.1-3.2-1 0-2.3.7-3 1.6-.7.8-1.3 2-1.1 3.1 1.1.1 2.3-.6 3-1.5z"/></svg>
+      Pokračovať cez Apple</button>
     <p class="err google-err" role="alert">${esc(ui.googleErr || '')}</p>
+    <p class="same">Prihlasuj sa vždy rovnako. Google, Apple a e-mail sú tri rôzne účty, každý s vlastným zoznamom.</p>
     <p class="or"><span>alebo e-mailom a heslom</span></p>
     <form data-form="login" class="login" novalidate>
       <label class="field"><span>E-mail</span><input type="email" name="email" value="${esc(ui.email)}" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false" required></label>
@@ -295,6 +299,8 @@ const authMsg = c => ({
   'auth/too-many-requests': 'Priveľa pokusov. Skús to o chvíľu.',
   'auth/account-exists-with-different-credential': 'Tento e-mail už má účet s heslom. Prihlás sa e-mailom a heslom.',
   'auth/popup-blocked': 'Prehliadač zablokoval okno prihlásenia. Skús to znova.',
+  'krytia/apple': 'Prihlásenie cez Apple sa nepodarilo. Skús to znova.',
+  'krytia/apple-wait': 'Apple prihlásenie sa ešte načítava. Ťukni o chvíľu znova.',
 }[c] || 'Nepodarilo sa. Skús to znova.');
 async function submitLogin(f) {
   const email = f.email.value.trim(), pw = f.password.value, err = f.querySelector('.err');
@@ -670,10 +676,12 @@ const acts = {
   },
   'del-doc': b => { S.doctors = S.doctors.filter(d => d.id !== b.dataset.id); if (ui.doc === b.dataset.id) ui.doc = 'all'; save(); closeSheet(); render(true); },
   'del-place': b => { S.places = S.places.filter(p => p.id !== b.dataset.id); save(); closeSheet(); render(true); },
-  google: async () => {
+  google: () => acts.social('google'),
+  apple: () => acts.social('apple'),
+  social: async which => {
     if (!window.KrytiaCloud) { ui.googleErr = 'Nie je pripojenie na internet.'; render(); return; }
     ui.googleErr = ''; ui.busy = true; render();
-    try { await window.KrytiaCloud.google(); }
+    try { await window.KrytiaCloud[which](); }
     catch (e) {
       ui.busy = false;
       ui.googleErr = e && ['auth/popup-closed-by-user', 'auth/cancelled-popup-request'].includes(e.code) ? '' : authMsg(e && e.code);

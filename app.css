@@ -245,7 +245,11 @@ body.locked #view { padding-bottom: calc(env(safe-area-inset-bottom) + 32px); }
 .login .btn[disabled], .btn.google[disabled] { opacity: .6; }
 .btn.google { display: flex; align-items: center; justify-content: center; gap: 12px; background: var(--card); color: var(--ink); border: 1.5px solid var(--line); }
 .btn.google svg { width: 22px; height: 22px; flex: none; }
+.btn.apple { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 10px; background: #000; color: #fff; border: 1.5px solid #000; }
+.btn.apple svg { width: 20px; height: 20px; flex: none; }
+.btn.apple[disabled] { opacity: .6; }
 .google-err { margin: 8px 0 0; }
+.same { margin-top: 10px; font-size: 14.5px; color: var(--muted); }
 .or { display: flex; align-items: center; gap: 12px; margin: 22px 0 18px; color: var(--muted); font-size: 15px; }
 .or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .login-more { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin-top: 10px; }

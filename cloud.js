@@ -6,7 +6,7 @@
 import {
   initializeApp, initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, connectAuthEmulator,
   onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut,
-  GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, browserPopupRedirectResolver,
+  GoogleAuthProvider, OAuthProvider, signInWithPopup, signInWithCredential, signInWithRedirect, getRedirectResult, browserPopupRedirectResolver,
   initializeFirestore, memoryLocalCache, connectFirestoreEmulator, doc, onSnapshot, runTransaction, serverTimestamp,
 } from './vendor/firebase.js';
 /* Verejné údaje webovej appky Firebase; súbor je iba vo zverejnenej verzii (pozri README). */
@@ -153,18 +153,58 @@ async function newKey(code) {
   key = k; salt = s;
 }
 
+/* Sign in with Apple: skript Apple, jednorazový kód (nonce) a nastavenie sa pripravia vopred. */
+const APPLE_JS = 'https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/sk_SK/appleid.auth.js';
+let appleNonce = null, appleLoading = null;
+function prepareApple() {
+  appleNonce = null;
+  appleLoading = appleLoading || new Promise((res, rej) => {
+    if (window.AppleID) return res();
+    const s = document.createElement('script');
+    s.src = APPLE_JS; s.async = true; s.onload = res; s.onerror = () => { appleLoading = null; rej(); };
+    document.head.append(s);
+  });
+  appleLoading.then(async () => {
+    const raw = b64(crypto.getRandomValues(new Uint8Array(24))).replace(/[^a-zA-Z0-9]/g, '');
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)))].map(x => x.toString(16).padStart(2, '0')).join('');
+    window.AppleID.auth.init({ clientId: 'com.rpalo.krytia.web', scope: 'email', redirectURI: 'https://zochyyyyyy.github.io/krytia-app/', nonce: hash, usePopup: true });
+    appleNonce = raw;
+  }).catch(() => {});
+}
+if (navigator.onLine) prepareApple();
+
+/* Prihlásenie cez Google alebo Apple: na počítači okno, v mobile a v appke na ploche presmerovanie
+   (okná tam iOS nevracia späť). */
+async function social(p) {
+  const touch = matchMedia('(pointer: coarse)').matches || navigator.standalone;
+  if (touch) return signInWithRedirect(auth, p);
+  try { return await signInWithPopup(auth, p); }
+  catch (e) { if (e && e.code === 'auth/popup-blocked') return signInWithRedirect(auth, p); throw e; }
+}
+
 window.KrytiaCloud = {
   changed: () => { if (ref) schedule(700); },
   login: (email, pw) => signInWithEmailAndPassword(auth, email, pw),
   register: (email, pw) => createUserWithEmailAndPassword(auth, email, pw),
-  /* Na počítači okno, v mobile a v appke na ploche presmerovanie (okná tam iOS nevracia späť). */
   async google() {
     const p = new GoogleAuthProvider();
     p.setCustomParameters({ prompt: 'select_account' });
-    const touch = matchMedia('(pointer: coarse)').matches || navigator.standalone;
-    if (touch) return signInWithRedirect(auth, p);
-    try { return await signInWithPopup(auth, p); }
-    catch (e) { if (e && e.code === 'auth/popup-blocked') return signInWithRedirect(auth, p); throw e; }
+    return social(p);
+  },
+  /* Apple vracia výsledok POST-om, ktorý GitHub Pages neprijme, preto ide cez Apple vlastné okno
+     (na iPhone natívne s Face ID) a Firebase dostane hotový token. Okno sa musí otvoriť hneď
+     v ťuknutí, preto je všetko pripravené vopred v prepareApple(). */
+  async apple() {
+    if (!window.AppleID || !appleNonce) { prepareApple(); throw Object.assign(new Error('apple'), { code: 'krytia/apple-wait' }); }
+    const raw = appleNonce;
+    let r;
+    try { r = await window.AppleID.auth.signIn(); }
+    catch (e) {
+      prepareApple();
+      throw Object.assign(new Error('apple'), { code: e && e.error === 'popup_closed_by_user' ? 'auth/popup-closed-by-user' : 'krytia/apple' });
+    }
+    const cred = new OAuthProvider('apple.com').credential({ idToken: r.authorization.id_token, rawNonce: raw });
+    try { return await signInWithCredential(auth, cred); } finally { prepareApple(); }
   },
   reset: email => sendPasswordResetEmail(auth, email),
   logout: async () => { dirty = false; clearTimeout(timer); key = null; await dropKeys(); return signOut(auth); },
