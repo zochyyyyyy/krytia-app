@@ -3,7 +3,7 @@
    Hodnoty sú vo Firebase konzole: Project settings > Your apps > Krytia web > Config. */
 export default {
   apiKey: 'AIzaSyCZoyATMRcSqEGDihQO9nbUlUKawCcqfrI',
-  authDomain: 'krytia.firebaseapp.com',
+  authDomain: 'zochyyyyyy.github.io',
   projectId: 'krytia',
   storageBucket: 'krytia.firebasestorage.app',
   messagingSenderId: '639307740232',

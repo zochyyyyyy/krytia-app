@@ -242,7 +242,12 @@ body.locked #view { padding-bottom: calc(env(safe-area-inset-bottom) + 32px); }
 .login-top { margin: 6vh 0 24px; }
 .login-top img { display: block; border-radius: 14px; margin-bottom: 14px; }
 .login-top .sub { font-size: 17px; max-width: 34ch; }
-.login .btn[disabled] { opacity: .6; }
+.login .btn[disabled], .btn.google[disabled] { opacity: .6; }
+.btn.google { display: flex; align-items: center; justify-content: center; gap: 12px; background: var(--card); color: var(--ink); border: 1.5px solid var(--line); }
+.btn.google svg { width: 22px; height: 22px; flex: none; }
+.google-err { margin: 8px 0 0; }
+.or { display: flex; align-items: center; gap: 12px; margin: 22px 0 18px; color: var(--muted); font-size: 15px; }
+.or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .login-more { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin-top: 10px; }
 .login-more .textbtn { padding: 0; }
 .sync { margin-top: 8px; font-size: 15px; font-weight: 600; color: var(--go); }

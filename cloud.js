@@ -6,13 +6,19 @@
 import {
   initializeApp, initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, connectAuthEmulator,
   onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut,
+  GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, browserPopupRedirectResolver,
   initializeFirestore, memoryLocalCache, connectFirestoreEmulator, doc, onSnapshot, runTransaction, serverTimestamp,
 } from './vendor/firebase.js';
 /* Verejné údaje webovej appky Firebase; súbor je iba vo zverejnenej verzii (pozri README). */
 import config from './firebase-config.js';
 
 const app = initializeApp(config);
-const auth = initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] });
+/* Prihlásenie cez Google: authDomain je tá istá doména ako appka (pomocné súbory sú v repozitári
+   zochyyyyyy.github.io), inak by Safari návrat z prihlásenia zahodil. */
+const auth = initializeAuth(app, {
+  persistence: [indexedDBLocalPersistence, browserLocalPersistence],
+  popupRedirectResolver: browserPopupRedirectResolver,
+});
 auth.languageCode = 'sk';
 const db = initializeFirestore(app, { localCache: memoryLocalCache() });
 /* Skúška na počítači proti lokálnym emulátorom: adresa s ?emu */
@@ -134,6 +140,9 @@ onAuthStateChanged(auth, user => {
   }, () => K.status('wait'));
 });
 
+/* Návrat z prihlásenia cez Google (presmerovanie v mobile). */
+getRedirectResult(auth).catch(e => K.loginError(e && e.code));
+
 addEventListener('online', () => { if (dirty) push(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && dirty) push(); });
 
@@ -148,6 +157,15 @@ window.KrytiaCloud = {
   changed: () => { if (ref) schedule(700); },
   login: (email, pw) => signInWithEmailAndPassword(auth, email, pw),
   register: (email, pw) => createUserWithEmailAndPassword(auth, email, pw),
+  /* Na počítači okno, v mobile a v appke na ploche presmerovanie (okná tam iOS nevracia späť). */
+  async google() {
+    const p = new GoogleAuthProvider();
+    p.setCustomParameters({ prompt: 'select_account' });
+    const touch = matchMedia('(pointer: coarse)').matches || navigator.standalone;
+    if (touch) return signInWithRedirect(auth, p);
+    try { return await signInWithPopup(auth, p); }
+    catch (e) { if (e && e.code === 'auth/popup-blocked') return signInWithRedirect(auth, p); throw e; }
+  },
   reset: email => sendPasswordResetEmail(auth, email),
   logout: async () => { dirty = false; clearTimeout(timer); key = null; await dropKeys(); return signOut(auth); },
   /* Prvý kód pre účet, ktorý ešte nemá šifrovaný zoznam. */
