@@ -251,8 +251,8 @@ function vLekari() {
       ${places}<button type="button" class="btn ghost wide" data-act="edit-place">Pridať zariadenie</button></section>
     <section class="sect"><h2>Pripomienka</h2><p>Telefón sám neupozorní, kým appku neotvoríš. Pridaj si do kalendára budík na každé pracovné ráno o 7:00.</p>
       <button type="button" class="btn ghost wide" data-act="ics">Pridať pripomienku do kalendára</button></section>
-    <section class="sect"><h2>Účet</h2><p>Zoznam sa ukladá do účtu <b>${esc(acct ? acct.email : '')}</b>. Rovnaký ho uvidíš v mobile, na iPade aj na počítači, keď sa tam prihlásiš.</p>
-      <p class="sync ${ui.sync}">${{ ok: 'Všetko je uložené v účte.', wait: 'Bez pripojenia. Zmeny sa uložia do účtu, keď bude signál.', saving: 'Ukladá sa do účtu…' }[ui.sync]}</p>
+    <section class="sect"><h2>Účet</h2><p>Zoznam sa ukladá do účtu <b>${esc(acct ? acct.email : '')}</b>, zašifrovaný tvojím kódom. Rovnaký ho uvidíš v mobile, na iPade aj na počítači, keď sa tam prihlásiš a zadáš kód.</p>
+      <p class="sync ${ui.sync}">${{ ok: 'Všetko je uložené v účte, zašifrované.', wait: 'Bez pripojenia. Zmeny sa uložia do účtu, keď bude signál.', saving: 'Ukladá sa do účtu…' }[ui.sync]}</p>
       <button type="button" class="btn ghost wide" data-act="logout">Odhlásiť sa</button></section>
     <section class="sect"><h2>Záloha do súboru</h2><p>Navyše, pre istotu. ${bk}</p>
       <button type="button" class="btn wide" data-act="backup">Uložiť zálohu</button>
@@ -305,12 +305,56 @@ async function submitLogin(f) {
   }
 }
 
+/* ---------- šifrovací kód ---------- */
+function vCode() {
+  const top = (h, p) => `<header class="top login-top"><img src="icons/icon.svg" alt="" width="56" height="56"><h1>${h}</h1><p class="sub">${p}</p></header>`;
+  if (ui.code === 'wait') return top('Krytia', 'Načítava sa zoznam z účtu…');
+  const fresh = ui.code === 'new' || ui.code === 'reset';
+  const head = {
+    new: top('Šifrovací kód', 'Mená pacientov sa zašifrujú ešte v tomto zariadení. Bez kódu ich neprečíta nikto, ani Google, ani správca appky.'),
+    reset: top('Nový šifrovací kód', `Zoznam z tohto zariadenia (${pacientov(S.patients.length)}) sa zašifruje novým kódom a nahradí zoznam v účte.`),
+    enter: top('Zadaj šifrovací kód', 'Zoznam v účte je zašifrovaný. Kód stačí zadať raz na každom zariadení.'),
+    changed: top('Kód sa zmenil', 'Na inom zariadení bol nastavený nový šifrovací kód. Zadaj nový kód.'),
+  }[ui.code];
+  return `${head}
+    <form data-form="code" class="login" novalidate>
+      <input type="email" name="username" value="${esc(acct ? acct.email : '')}" autocomplete="username" hidden>
+      <label class="field"><span>Kód${fresh ? '<span class="hint">Aspoň 6 znakov. Zapíš si ho na papier: keď sa zabudne, zoznam sa nedá obnoviť.</span>' : ''}</span>
+        <input type="password" name="code" autocomplete="${fresh ? 'new-password' : 'current-password'}" autocapitalize="off" spellcheck="false" required></label>
+      ${fresh ? '<label class="field"><span>Kód znova</span><input type="password" name="code2" autocomplete="new-password" autocapitalize="off" spellcheck="false" required></label>' : ''}
+      <p class="err" role="alert"></p>
+      <button type="submit" class="btn wide"${ui.busy ? ' disabled' : ''}>${ui.busy ? 'Chvíľu…' : fresh ? 'Nastaviť kód' : 'Odomknúť'}</button>
+    </form>
+    <div class="login-more">
+      ${fresh ? (ui.code === 'reset' ? '<button type="button" class="textbtn" data-act="code-back">Skúsiť znova starý kód</button>' : '')
+        : '<button type="button" class="textbtn" data-act="code-forgot">Zabudnutý kód</button>'}
+      <button type="button" class="textbtn" data-act="logout">Odhlásiť sa</button>
+    </div>`;
+}
+async function submitCode(f) {
+  const code = f.code.value, err = f.querySelector('.err');
+  const fresh = ui.code === 'new' || ui.code === 'reset';
+  if (code.length < 6) { err.textContent = 'Kód musí mať aspoň 6 znakov.'; return; }
+  if (fresh && code !== f.code2.value) { err.textContent = 'Kódy sa nezhodujú. Napíš ich znova.'; f.code2.value = ''; f.code2.focus(); return; }
+  if (!window.KrytiaCloud) { err.textContent = 'Nie je pripojenie na internet.'; return; }
+  const mode = ui.code;
+  ui.busy = true; render();
+  try {
+    await (mode === 'new' ? window.KrytiaCloud.setCode(code) : mode === 'reset' ? window.KrytiaCloud.resetCode(code) : window.KrytiaCloud.enterCode(code));
+    ui.busy = false;
+  } catch (e) {
+    ui.busy = false; render();
+    $('form[data-form=code] .err').textContent = e && e.code === 'krytia/wrong-code' ? 'Kód nesedí. Skús ho znova.' : 'Nepodarilo sa. Skús to znova.';
+  }
+}
+
 /* ---------- vykreslenie ---------- */
 function render(keepScroll) {
   const y = window.scrollY;
   const view = $('#view');
-  document.body.classList.toggle('locked', ui.locked);
+  document.body.classList.toggle('locked', ui.locked || !!ui.code);
   if (ui.locked) { view.innerHTML = vLogin(); window.scrollTo(0, 0); return; }
+  if (ui.code) { view.innerHTML = vCode(); window.scrollTo(0, 0); return; }
   view.innerHTML = { dnes: vDnes, pacienti: vPacienti, lekari: vLekari }[ui.tab]();
   renderList();
   document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-current', b.dataset.tab === ui.tab ? 'page' : 'false'));
@@ -627,6 +671,19 @@ const acts = {
     try { await window.KrytiaCloud.reset(email); toast(`Ak účet existuje, na ${email} prišiel odkaz na nové heslo`); }
     catch (e) { err.textContent = authMsg(e && e.code); }
   },
+  'code-forgot': async () => {
+    const n = S.patients.length;
+    const go = await ask({
+      title: 'Nastaviť nový kód?',
+      text: n
+        ? `Bez starého kódu sa zoznam v účte nedá otvoriť. Nový kód zašifruje zoznam z tohto zariadenia (${pacientov(n)}) a ten nahradí zoznam v účte. Ostatné zariadenia budú pýtať nový kód a ich zoznamy sa potom pridajú.`
+        : 'Na tomto zariadení zatiaľ nie je žiadny zoznam. Nový kód začne s prázdnym zoznamom a ten v účte sa nahradí. Ak má zoznam iné zariadenie, nastav nový kód radšej tam.',
+      safe: 'Skúsiť znova starý kód', go: 'Nastaviť nový kód', danger: true,
+    });
+    if (!go) return;
+    ui.code = 'reset'; render();
+  },
+  'code-back': () => { ui.code = 'enter'; render(); },
   logout: async () => {
     const pending = ui.sync !== 'ok';
     const go = await ask({
@@ -636,7 +693,7 @@ const acts = {
     });
     if (!go) return;
     localStorage.removeItem(OWNER); localStorage.removeItem(KEY);
-    S = blank(); snap = snapshotOf(S); acct = null; ui.locked = true; ui.mode = 'in'; ui.tab = 'dnes';
+    S = blank(); snap = snapshotOf(S); acct = null; ui.locked = true; ui.code = null; ui.mode = 'in'; ui.tab = 'dnes';
     render();
     if (window.KrytiaCloud) window.KrytiaCloud.logout();
   },
@@ -657,6 +714,7 @@ document.addEventListener('change', e => { if (e.target.id === 'file' && e.targe
 
 const forms = {
   login: submitLogin,
+  code: submitCode,
   add: submitAdd,
   'other-day': f => tick(f.dataset.id, f.date.value),
   patient: f => {
@@ -707,11 +765,20 @@ window.Krytia = {
     acct = { email };
     const was = ui.locked;
     ui.locked = false; ui.busy = false;
-    if (was) { ui.tab = 'dnes'; render(); } else if (ui.tab === 'lekari' && !sheet.open) render(true);
+    if (was) { ui.code = 'wait'; ui.tab = 'dnes'; render(); } else if (ui.tab === 'lekari' && !sheet.open) render(true);
   },
   signedOut() {
     if (localStorage.getItem(OWNER)) { localStorage.removeItem(OWNER); localStorage.removeItem(KEY); S = blank(); snap = snapshotOf(S); }
-    acct = null; ui.locked = true; ui.busy = false; render();
+    acct = null; ui.locked = true; ui.code = null; ui.busy = false; render();
+  },
+  /* Účet potrebuje šifrovací kód: new = prvý raz, enter = ďalšie zariadenie, changed = kód sa zmenil inde. */
+  needCode(mode) {
+    if (ui.code === 'reset' || ui.busy) return;
+    if (ui.code !== mode) { if (sheet.open) closeSheet(); if (askBox.open) askBox.close(); ui.code = mode; render(); }
+  },
+  codeOk() {
+    if (!ui.code) return;
+    ui.code = null; ui.busy = false; render();
   },
   current: () => S,
   merged: remote => merge(S, shape(remote)),
