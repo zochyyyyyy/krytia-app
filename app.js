@@ -77,8 +77,8 @@ const patient = id => S.patients.find(p => p.id === id);
 const active = () => S.patients.filter(p => !p.ended);
 
 /* Stav pacienta: due = na rade, early = skôr kvôli dovolenke, soon = čoskoro, done = má predpis */
-function status(p) {
-  const t = today(), { gap, early } = S.settings;
+function status(p, t = today()) {
+  const { gap, early } = S.settings;
   const last = p.dates.length ? p.dates[p.dates.length - 1] : null;
   const d = doctor(p.doctorId);
   const hasVac = d && d.vacFrom && d.vacTo;
@@ -102,6 +102,24 @@ function statusLine(p, s) {
   return `${a}, na rade ${fmt(s.dueDate)}`;
 }
 const urgency = p => { const s = status(p); return s.last ? s.days : 9999; };
+
+/* Prehľad na najbližšie dni bez mien (počty). Číta ho ranné upozornenie v telefóne, aby napísalo,
+   koľko pacientov je na rade, a ikona appky ukazuje dnešný počet. */
+const isDueOn = (p, t) => ['due', 'early'].includes(status(p, t).kind);
+function writeSummary() {
+  if (ui.locked) return;
+  const days = {};
+  const act = active();
+  for (let i = 0; i < 21; i++) {
+    const t = addDays(today(), i);
+    const due = act.filter(p => isDueOn(p, t));
+    days[t] = { due: due.length, late: due.filter(p => status(p, t).over > 0).length };
+  }
+  const n = days[today()].due;
+  try { if (navigator.setAppBadge) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); } catch (e) { /* bez odznaku */ }
+  if (!('caches' in window)) return;
+  caches.open('krytia-prehlad').then(c => c.put('prehlad.json', new Response(JSON.stringify({ at: Date.now(), days }), { headers: { 'Content-Type': 'application/json' } }))).catch(() => {});
+}
 
 /* ---------- stav obrazovky ---------- */
 const ui = { tab: 'dnes', q: '', doc: 'all', ended: false, locked: !localStorage.getItem(OWNER), mode: 'in', email: '', sync: 'ok', busy: false };
@@ -196,7 +214,12 @@ function listDnes() {
   const soon = mine.filter(p => status(p).kind === 'soon').sort((a, b) => urgency(b) - urgency(a));
   const n = due.length;
   $('#headline').textContent = n ? `${pacientov(n)} ${pl(n, 'je', 'sú', 'je')} na rade` : 'Dnes nie je nikto na rade';
-  let html = '';
+  const late = due.filter(p => status(p).over > 0).length;
+  const doneToday = mine.filter(p => p.dates.includes(today())).length;
+  let html = `<div class="stats" aria-label="Prehľad dňa">
+    <div class="stat${late ? ' bad' : ''}"><b>${late}</b><span>mešká</span></div>
+    <div class="stat"><b>${n - late}</b><span>na rade dnes</span></div>
+    <div class="stat${doneToday ? ' good' : ''}"><b>${doneToday}</b><span>hotové dnes</span></div></div>`;
   if (n) html += grouped(due, (a, b) => urgency(b) - urgency(a) || byName(a, b));
   else {
     const next = mine.filter(p => status(p).last).sort((a, b) => urgency(b) - urgency(a))[0];
@@ -235,35 +258,116 @@ function vLekari() {
     return `<button type="button" class="card tap" data-act="edit-doc" data-id="${d.id}">
       <span class="line"><strong class="h">${esc(d.name)}</strong><span class="meta">${ok} z ${mine.length} má predpis</span></span>
       <span class="prog" aria-hidden="true"><i style="width:${mine.length ? Math.round(ok / mine.length * 100) : 0}%"></i></span>
-      <span class="meta" style="display:block;margin-top:8px">${vac}</span></button>`;
+      <span class="meta below">${vac}</span></button>`;
   }).join('');
   const places = [...S.places].sort(byName).map(pc => {
     const n = active().filter(p => p.placeId === pc.id).length;
     return `<button type="button" class="card tap" data-act="edit-place" data-id="${pc.id}">
       <span class="line"><strong class="h">${esc(pc.name)}</strong><span class="meta">${pacientov(n)}</span></span>
-      <span class="meta" style="display:block">${esc([pc.contact, pc.phone].filter(Boolean).join(', ') || 'Bez telefónu')}</span></button>`;
+      <span class="meta below">${esc([pc.contact, pc.phone].filter(Boolean).join(', ') || 'Bez telefónu')}</span></button>`;
   }).join('');
-  const bk = S.lastBackup ? `Naposledy ${fmt(S.lastBackup)} (${predDnami(diff(t, S.lastBackup))}).` : 'Záloha ešte nebola urobená.';
   return `<header class="top"><h1>Lekári a zariadenia</h1></header>
-    ${docs || '<p class="meta" style="color:var(--muted)">Zatiaľ žiadny lekár.</p>'}
-    <button type="button" class="btn ghost wide" style="margin-top:10px" data-act="edit-doc">Pridať lekára</button>
+    ${docs || '<p class="quiet-note">Zatiaľ žiadny lekár.</p>'}
+    <button type="button" class="btn ghost wide gap-top" data-act="edit-doc">Pridať lekára</button>
     <section class="sect"><h2>Zariadenia</h2><p>ADOS-ky a domovy dôchodcov. S telefónom sa dá volať jedným ťuknutím.</p>
-      ${places}<button type="button" class="btn ghost wide" data-act="edit-place">Pridať zariadenie</button></section>
-    <section class="sect"><h2>Pripomienka</h2><p>Telefón sám neupozorní, kým appku neotvoríš. Pridaj si do kalendára budík na každé pracovné ráno o 7:00.</p>
-      <button type="button" class="btn ghost wide" data-act="ics">Pridať pripomienku do kalendára</button></section>
-    <section class="sect"><h2>Účet</h2><p>Zoznam sa ukladá do účtu <b>${esc(acct ? acct.email : '')}</b>, zašifrovaný tvojím kódom. Rovnaký ho uvidíš v mobile, na iPade aj na počítači, keď sa tam prihlásiš a zadáš kód.</p>
-      <p class="sync ${ui.sync}">${{ ok: 'Všetko je uložené v účte, zašifrované.', wait: 'Bez pripojenia. Zmeny sa uložia do účtu, keď bude signál.', saving: 'Ukladá sa do účtu…' }[ui.sync]}</p>
-      <button type="button" class="btn ghost wide" data-act="logout">Odhlásiť sa</button></section>
-    <section class="sect"><h2>Záloha do súboru</h2><p>Navyše, pre istotu. ${bk}</p>
-      <button type="button" class="btn wide" data-act="backup">Uložiť zálohu</button>
-      <button type="button" class="btn ghost wide" data-act="restore">Obnoviť zo zálohy</button>
-      <input type="file" id="file" accept="application/json,.json" hidden></section>
-    <section class="sect"><h2>Pravidlá</h2>
-      <form data-form="rules">
-        <label class="field"><span>Ďalší predpis najskôr po koľkých dňoch</span><input type="number" name="gap" inputmode="numeric" min="1" max="120" value="${S.settings.gap}"></label>
-        <label class="field"><span>Pred dovolenkou lekára najskôr po</span><input type="number" name="early" inputmode="numeric" min="1" max="120" value="${S.settings.early}"></label>
-        <button type="submit" class="btn ghost wide">Uložiť pravidlá</button>
-      </form></section>`;
+      ${places || '<p class="quiet-note">Zatiaľ žiadne zariadenie.</p>'}<button type="button" class="btn ghost wide" data-act="edit-place">Pridať zariadenie</button></section>`;
+}
+
+/* ---------- Nastavenia ---------- */
+const VERSION = '2026.11.20';
+const TIMES = ['06:00', '06:30', '07:00', '07:30', '08:00', '08:30', '09:00'];
+
+/* Ranné upozornenia: telefón si od služby Krytia (Cloudflare) vypýta upozornenie v zvolenom čase.
+   Služba dostane iba adresu upozornení telefónu a čas, žiadne mená. */
+const PUSH_KEY = 'krytia.push';
+const PUSH_URL = 'https://krytia-push.r-palocsanyi.workers.dev';
+/* Verejný kľúč upozornení vydá odosielač (/health), v zdroji nie je kvôli kontrole tajomstiev. */
+let vapidKey = null;
+async function vapid() {
+  if (!vapidKey) { const r = await fetch(PUSH_URL + '/health'); vapidKey = (await r.json()).key; }
+  if (!vapidKey) throw new Error('server');
+  return vapidKey;
+}
+function pushPrefs() {
+  const d = { on: false, time: '07:00', days: 'work' };
+  try { return Object.assign(d, JSON.parse(localStorage.getItem(PUSH_KEY))); } catch (e) { return d; }
+}
+const savePush = p => { try { localStorage.setItem(PUSH_KEY, JSON.stringify({ on: p.on, time: p.time, days: p.days })); } catch (e) { /* nič */ } };
+function pushState() {
+  const p = pushPrefs();
+  const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+  let support = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window ? 'yes' : 'no';
+  if (ios && !standalone) support = 'install';
+  const perm = support === 'yes' ? Notification.permission : 'default';
+  return { ...p, on: p.on && perm === 'granted', support, denied: perm === 'denied' };
+}
+const u8 = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+async function pushSub(create) {
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub && create) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: u8(await vapid()) });
+  return sub;
+}
+async function pushPost(path, sub, extra) {
+  const r = await fetch(PUSH_URL + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sub: sub.toJSON(), ...extra }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.ok === false) throw new Error('server');
+  return j;
+}
+async function pushRegister(p) { await pushPost('/sub', await pushSub(true), { time: p.time, days: p.days }); }
+async function pushOff() {
+  const sub = await pushSub(false).catch(() => null);
+  if (sub) { await pushPost('/unsub', sub).catch(() => {}); await sub.unsubscribe().catch(() => {}); }
+}
+async function pushRun(fn) {
+  ui.pushBusy = true; ui.pushErr = ''; render(true);
+  try { await fn(); }
+  catch (e) { ui.pushErr = e && e.message === 'denied' ? 'Upozornenia sú v telefóne zakázané. Povoľ ich v Nastaveniach telefónu pri Krytii.' : 'Nepodarilo sa. Skontroluj pripojenie a skús to znova.'; }
+  ui.pushBusy = false; render(true);
+}
+function vNastavenia() {
+  const t = today(), P = pushState();
+  const bk = S.lastBackup ? `Naposledy ${fmt(S.lastBackup)}, ${predDnami(diff(t, S.lastBackup))}.` : 'Záloha ešte nebola urobená.';
+  const sync = { ok: 'Uložené v účte, zašifrované', wait: 'Bez pripojenia, uloží sa neskôr', saving: 'Ukladá sa…' }[ui.sync];
+  let push;
+  if (P.support === 'install') {
+    push = `<div class="group"><div class="item col"><strong>Najprv pridaj Krytiu na plochu</strong>
+      <span class="meta">Upozornenia na iPhone a iPade fungujú iba v appke na ploche: v Safari ťukni na Zdieľať a potom Pridať na plochu. Potom Krytiu otvor z plochy.</span></div></div>`;
+  } else if (P.support === 'no') {
+    push = `<div class="group"><div class="item col"><strong>Toto zariadenie upozornenia nepodporuje</strong>
+      <span class="meta">Namiesto nich si pridaj pripomienku do kalendára.</span>
+      <button type="button" class="btn ghost wide" data-act="ics">Pridať pripomienku do kalendára</button></div></div>`;
+  } else {
+    const on = P.on;
+    push = `<div class="group">
+      <div class="item"><span class="lbl"><strong>Ranné upozornenie</strong><span class="meta">${on ? `Každý ${P.days === 'all' ? 'deň' : 'pracovný deň'} o ${P.time.replace(/^0/, '')}: koľko pacientov je na rade.` : P.denied ? 'Upozornenia sú v telefóne zakázané. Povoľ ich v Nastaveniach telefónu pri Krytii.' : 'Telefón ráno pripomenie, koľko pacientov je na rade.'}</span></span>
+        <button type="button" class="switch" role="switch" aria-checked="${on}" aria-label="Ranné upozornenie" data-act="push-toggle"${ui.pushBusy ? ' disabled' : ''}><i></i></button></div>
+      ${on ? `<div class="item col"><span class="lbl"><strong>Čas</strong></span>
+        <div class="chips times" role="group" aria-label="Čas upozornenia">${TIMES.map(x => `<button type="button" class="chip" data-act="push-time" data-v="${x}" aria-pressed="${P.time === x}">${x.replace(/^0/, '')}</button>`).join('')}</div></div>
+      <div class="item"><span class="lbl"><strong>Aj cez víkend</strong></span>
+        <button type="button" class="switch" role="switch" aria-checked="${P.days === 'all'}" aria-label="Upozornenie aj cez víkend" data-act="push-days"${ui.pushBusy ? ' disabled' : ''}><i></i></button></div>
+      <div class="item"><button type="button" class="textbtn" data-act="push-test"${ui.pushBusy ? ' disabled' : ''}>Poslať skúšobné upozornenie</button></div>` : ''}
+      <p class="err" role="alert">${esc(ui.pushErr || '')}</p></div>`;
+  }
+  const step = (name, v, label, hint) => `<div class="item"><span class="lbl"><strong>${label}</strong><span class="meta">${hint}</span></span>
+    <span class="stepper"><button type="button" data-act="rule" data-k="${name}" data-d="-1" aria-label="Menej dní">−</button><b>${v}</b><button type="button" data-act="rule" data-k="${name}" data-d="1" aria-label="Viac dní">+</button></span></div>`;
+  return `<header class="top"><h1>Nastavenia</h1></header>
+    <section class="sect first"><h2>Upozornenia</h2>${push}</section>
+    <section class="sect"><h2>Pravidlá</h2><div class="group">
+      ${step('gap', S.settings.gap, 'Ďalší predpis po', `dňoch od posledného`)}
+      ${step('early', S.settings.early, 'Pred dovolenkou po', `dňoch, keď lekár odchádza`)}
+    </div></section>
+    <section class="sect"><h2>Účet</h2><div class="group">
+      <div class="item col"><strong>${esc(acct ? acct.email : '')}</strong><span class="meta sync ${ui.sync}">${sync}</span>
+        <span class="meta">Zoznam je zašifrovaný tvojím kódom. Rovnaký ho uvidíš v mobile, na iPade aj na počítači.</span></div>
+      <div class="item"><button type="button" class="textbtn danger" data-act="logout">Odhlásiť sa</button></div>
+    </div></section>
+    <section class="sect"><h2>Záloha do súboru</h2><div class="group">
+      <div class="item col"><span class="meta">Navyše, pre istotu. ${bk}</span>
+        <div class="pair"><button type="button" class="btn ghost" data-act="backup">Uložiť zálohu</button><button type="button" class="btn ghost" data-act="restore">Obnoviť</button></div></div>
+      <input type="file" id="file" accept="application/json,.json" hidden></div></section>
+    <p class="version">Krytia, verzia ${VERSION}</p>`;
 }
 
 /* ---------- prihlásenie ---------- */
@@ -279,7 +383,9 @@ function vLogin() {
       Pokračovať cez Apple</button>
     <p class="err google-err" role="alert">${esc(ui.googleErr || '')}</p>
     <p class="same">Prihlasuj sa vždy rovnako. Google, Apple a e-mail sú tri rôzne účty, každý s vlastným zoznamom.</p>
-    <p class="or"><span>alebo e-mailom a heslom</span></p>
+    ${ui.mailOpen || make ? '' : '<button type="button" class="btn ghost wide mail-open" data-act="mail">Prihlásiť sa e-mailom a heslom</button>'}
+    <div${ui.mailOpen || make ? '' : ' hidden'}>
+    <p class="or"><span>e-mailom a heslom</span></p>
     <form data-form="login" class="login" novalidate>
       <label class="field"><span>E-mail</span><input type="email" name="email" value="${esc(ui.email)}" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false" required></label>
       <label class="field"><span>Heslo${make ? '<span class="hint">Aspoň 6 znakov. Zapíš si ho.</span>' : ''}</span>
@@ -290,7 +396,7 @@ function vLogin() {
     <div class="login-more">
       <button type="button" class="textbtn" data-act="mode">${make ? 'Už mám účet, prihlásiť sa' : 'Nemám účet, vytvoriť nový'}</button>
       ${make ? '' : '<button type="button" class="textbtn" data-act="reset">Zabudnuté heslo</button>'}
-    </div>`;
+    </div></div>`;
 }
 const authMsg = c => ({
   'auth/invalid-credential': 'E-mail alebo heslo nesedí.', 'auth/wrong-password': 'E-mail alebo heslo nesedí.', 'auth/user-not-found': 'E-mail alebo heslo nesedí.',
@@ -368,7 +474,8 @@ function render(keepScroll) {
   document.body.classList.toggle('locked', ui.locked || !!ui.code);
   if (ui.locked) { view.innerHTML = vLogin(); window.scrollTo(0, 0); return; }
   if (ui.code) { view.innerHTML = vCode(); window.scrollTo(0, 0); return; }
-  view.innerHTML = { dnes: vDnes, pacienti: vPacienti, lekari: vLekari }[ui.tab]();
+  view.innerHTML = { dnes: vDnes, pacienti: vPacienti, lekari: vLekari, nastavenia: vNastavenia }[ui.tab]();
+  writeSummary();
   renderList();
   document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-current', b.dataset.tab === ui.tab ? 'page' : 'false'));
   window.scrollTo(0, keepScroll ? y : 0);
@@ -696,6 +803,28 @@ const acts = {
     try { await window.KrytiaCloud.reset(email); toast(`Ak účet existuje, na ${email} prišiel odkaz na nové heslo`); }
     catch (e) { err.textContent = authMsg(e && e.code); }
   },
+  'push-toggle': () => {
+    const p = pushPrefs();
+    if (pushState().on) { pushRun(async () => { await pushOff(); savePush({ ...p, on: false }); toast('Ranné upozornenie je vypnuté'); }); return; }
+    /* Povolenie sa musí vypýtať hneď v ťuknutí, inak ho iPhone nezobrazí. */
+    const perm = Notification.requestPermission();
+    pushRun(async () => {
+      if (await perm !== 'granted') throw new Error('denied');
+      await pushRegister(p); savePush({ ...p, on: true }); writeSummary();
+      toast(`Ranné upozornenie je zapnuté na ${p.time.replace(/^0/, '')}`);
+    });
+  },
+  'push-time': b => { const p = { ...pushPrefs(), time: b.dataset.v }; savePush(p); pushRun(() => pushRegister(p)); },
+  'push-days': () => { const p0 = pushPrefs(), p = { ...p0, days: p0.days === 'all' ? 'work' : 'all' }; savePush(p); pushRun(() => pushRegister(p)); },
+  'push-test': () => pushRun(async () => { await pushPost('/test', await pushSub(true)); toast('Skúšobné upozornenie príde o pár sekúnd'); }),
+  rule: b => {
+    const k = b.dataset.k, s = { ...S.settings };
+    s[k] = Math.min(120, Math.max(1, s[k] + Number(b.dataset.d)));
+    if (k === 'early' && s.early > s.gap) s.early = s.gap;
+    if (k === 'gap' && s.early > s.gap) s.early = s.gap;
+    S.settings = { ...S.settings, gap: s.gap, early: s.early }; save(); render(true);
+  },
+  mail: () => { ui.mailOpen = true; render(); const f = $('form[data-form=login] input[name=email]'); if (f) f.focus(); },
   'code-forgot': async () => {
     const n = S.patients.length;
     const go = await ask({
@@ -718,7 +847,11 @@ const acts = {
     });
     if (!go) return;
     localStorage.removeItem(OWNER); localStorage.removeItem(KEY);
-    S = blank(); snap = snapshotOf(S); acct = null; ui.locked = true; ui.code = null; ui.mode = 'in'; ui.tab = 'dnes';
+    /* Odhlásené zariadenie už nemá dostávať ranné upozornenia ani ukazovať počet na ikone. */
+    if (pushState().support === 'yes') pushOff().catch(() => {});
+    savePush({ ...pushPrefs(), on: false });
+    try { if ('caches' in window) caches.delete('krytia-prehlad'); if (navigator.clearAppBadge) navigator.clearAppBadge().catch(() => {}); } catch (e) { /* nič */ }
+    S = blank(); snap = snapshotOf(S); acct = null; ui.locked = true; ui.code = null; ui.mode = 'in'; ui.mailOpen = false; ui.tab = 'dnes';
     render();
     if (window.KrytiaCloud) window.KrytiaCloud.logout();
   },
@@ -764,11 +897,6 @@ const forms = {
     if (f.dataset.id) Object.assign(place(f.dataset.id), v); else S.places.push({ id: uid(), ...v });
     save(); closeSheet(); render(true); toast(f.dataset.id ? 'Zmeny uložené' : 'Zariadenie pridané');
   },
-  rules: f => {
-    const gap = +f.gap.value, early = +f.early.value;
-    if (!(gap >= 1) || !(early >= 1) || early > gap) { toast('Pred dovolenkou nemôže byť viac dní než bežne'); return; }
-    S.settings = { gap, early }; save(); render(true); toast('Pravidlá uložené');
-  },
 };
 document.addEventListener('submit', e => {
   const f = e.target.closest('form[data-form]');
@@ -790,7 +918,7 @@ window.Krytia = {
     acct = { email };
     const was = ui.locked;
     ui.locked = false; ui.busy = false;
-    if (was) { ui.code = 'wait'; ui.tab = 'dnes'; render(); } else if (ui.tab === 'lekari' && !sheet.open) render(true);
+    if (was) { ui.code = 'wait'; ui.tab = 'dnes'; render(); } else if (ui.tab === 'nastavenia' && !sheet.open) render(true);
   },
   signedOut() {
     if (localStorage.getItem(OWNER)) { localStorage.removeItem(OWNER); localStorage.removeItem(KEY); S = blank(); snap = snapshotOf(S); }
@@ -825,10 +953,12 @@ window.Krytia = {
     if (ui.sync === s) return;
     ui.sync = s;
     const el = $('.sync');
-    if (el && ui.tab === 'lekari' && !ui.locked) render(true);
+    if (el && ui.tab === 'nastavenia' && !ui.locked && !sheet.open) render(true);
   },
 };
 
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) navigator.serviceWorker.register('sw.js');
+/* Ťuknutie na upozornenie otvorí appku na obrazovke Dnes. */
+if (new URLSearchParams(location.search).get('z') === 'upozornenie') ui.tab = 'dnes';
 render();
